@@ -8,7 +8,7 @@ FROM base AS deps
 COPY package.json package-lock.json* ./
 RUN \
   if [ -f package-lock.json ]; then npm ci; \
-  else echo "Lockfile not found." && exit 1; \
+  else npm install; \
   fi
 
 # Build the application (static export)
