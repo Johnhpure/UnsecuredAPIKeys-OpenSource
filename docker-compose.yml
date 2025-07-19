@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: unsecured-api-keys-db
+    environment:
+      POSTGRES_DB: UnsecuredAPIKeys
+      POSTGRES_USER: unsecured_api_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password_2024}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - unsecured-api-keys-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unsecured_api_user -d UnsecuredAPIKeys"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Web API Service
+  webapi:
+    build:
+      context: .
+      dockerfile: UnsecuredAPIKeys.WebAPI/Dockerfile
+    container_name: unsecured-api-keys-webapi
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8080
+      - CONNECTION_STRING=Host=postgres;Database=UnsecuredAPIKeys;Username=unsecured_api_user;Password=${POSTGRES_PASSWORD:-secure_password_2024};Port=5432
+      - PRODUCTION_DOMAIN=${PRODUCTION_DOMAIN:-localhost}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - unsecured-api-keys-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend UI Service
+  frontend:
+    build:
+      context: UnsecuredAPIKeys.UI
+      dockerfile: Dockerfile
+    container_name: unsecured-api-keys-frontend
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      webapi:
+        condition: service_healthy
+    networks:
+      - unsecured-api-keys-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Verification Bot Service
+  verification-bot:
+    build:
+      context: .
+      dockerfile: UnsecuredAPIKeys.Bots.Verifier/Dockerfile
+    container_name: unsecured-api-keys-verification-bot
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - CONNECTION_STRING=Host=postgres;Database=UnsecuredAPIKeys;Username=unsecured_api_user;Password=${POSTGRES_PASSWORD:-secure_password_2024};Port=5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - unsecured-api-keys-network
+    restart: unless-stopped
+    volumes:
+      - ./UnsecuredAPIKeys.Bots.Verifier/appsettings.json:/app/appsettings.json:ro
+
+  # Scraper Bot Service
+  scraper-bot:
+    build:
+      context: .
+      dockerfile: UnsecuredAPIKeys.Bots.Scraper/Dockerfile
+    container_name: unsecured-api-keys-scraper-bot
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - CONNECTION_STRING=Host=postgres;Database=UnsecuredAPIKeys;Username=unsecured_api_user;Password=${POSTGRES_PASSWORD:-secure_password_2024};Port=5432
+      # Add your GitHub Token and other API keys here
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - unsecured-api-keys-network
+    restart: unless-stopped
+
+# Named volumes for persistent data
+volumes:
+  postgres_data:
+    driver: local
+
+# Custom network for service communication
+networks:
+  unsecured-api-keys-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
